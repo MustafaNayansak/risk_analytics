@@ -1,0 +1,852 @@
+---
+title: "Graduation Project"
+author: "Mustafa Nayansak - 528191047"
+date: "12-07-2020"
+output: 
+  pdf_document:
+    toc: true
+    toc_depth: 3
+geometry: "left=3cm,right=3cm,top=3cm,bottom=4cm"
+
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,fig.align  = "center")
+```
+
+```{r echo=FALSE}
+load("Finance_GRAD_MN.RData")
+```
+
+```{r echo=FALSE}
+library(tidyverse)
+library(kableExtra)
+library(magrittr)
+library(tidyquant)
+library(tsibble)
+library(feasts)
+library(tsibbledata)
+library(FinTS)
+library(ecp)
+library(tempdisagg)
+library(fable)
+library(fabletools)
+library(feasts)
+library(quantmod)
+library(highcharter)
+library(lubridate)
+library(tibbletime)
+library(openair)
+library(zoo)
+library(xts) 
+library(GAS)
+library(png)
+library(grid)
+```
+
+\newpage
+
+# Introduction 
+
+\par In this report, Value at Risk research was conducted for Banvit and Net holding stocks. The data set consists of approximately 260000 lines of observations and the data is in milliseconds. In the data set, operations such as filling missing data, combining stock data, and time synchronization were performed. In addition, 4 different data sets were created for 1 minute, 15 minutes, 30 minutes and daily, and the effects of the methods and significance levels used on the data set were investigated.
+
+\par In the study, the value at risk research was investigated in four different ways: parametric, historical, monte carlo and age weighted. Additionally, the performance of the related value at risk method was measured using the sliding method. Finally, statistical analysis of exceedence was done using backtesting methods.
+
+\newpage
+
+# Data 
+
+## Net Holding (nthol)
+```{r}
+readxl::read_xlsx("stocks202005111746b.xlsx", sheet = "nthol") %>% 
+  arrange(Timestamp) %>% 
+  mutate(symbol = "nthol",
+         Timestamp = format(as.POSIXct(Timestamp), 
+                            format = "%Y-%m-%d %H:%M:%OS3")) %>% 
+  head() %>% kable()
+
+```
+
+### Data Summary
+
+\par Descriptive statistics are very informative about the distribution of a data set. As can be seen from the table, although there is not much difference between the minimum and maximum values of the closing values of the nthol stock, their volumes have distant values.
+
+```{r}
+nthol %>% select_if(is.numeric) %>% summary() %>% kable()
+```
+
+
+## Banvit (banvt)
+
+\par The time difference of the stock values of banvit and net holding is about 7 minutes. Therefore, these data sets should be combined with various manipulation procedures.
+
+```{r}
+readxl::read_xlsx("stocks202005111746b.xlsx", sheet = "banvt") %>% 
+  arrange(Timestamp) %>% 
+  mutate(symbol = "banvt",
+         Timestamp = format(as.POSIXct(Timestamp), 
+           format = "%Y-%m-%d %H:%M:%OS3")) %>% 
+  tail(20) %>% kable()
+```
+
+### Data Summary
+```{r}
+banvt %>% select_if(is.numeric) %>% summary() %>% kable()
+```
+
+## Data Manipulation
+
+### Creating Different Time Periods
+
+\par Below are three different ways to separate two stock data in minutes, 15 minutes and 30 minutes. In addition, opening, closing, minimum and maximum values of the relevant time interval were calculated. A new variable was created by taking the average of the minimum and maximum values obtained here. In this way, it is aimed to take into account the variability in the data.
+
+
+```{r}
+banvt_1m <- cbind(to.minutes(banvt_xts),rowMeans(to.minutes(banvt_xts)[,2:3]))[,5]
+nthol_1m <- cbind(to.minutes(nthol_xts),rowMeans(to.minutes(nthol_xts)[,2:3]))[,5]
+
+banvt_15m <- cbind(to.minutes15(banvt_xts),rowMeans(to.minutes15(banvt_xts)[,2:3]))[,5]
+nthol_15m <- cbind(to.minutes15(nthol_xts),rowMeans(to.minutes15(nthol_xts)[,2:3]))[,5]
+
+banvt_30m <- cbind(to.minutes30(banvt_xts),rowMeans(to.minutes30(banvt_xts)[,2:3]))[,5]
+nthol_30m <- cbind(to.minutes30(nthol_xts),rowMeans(to.minutes30(nthol_xts)[,2:3]))[,5]
+```
+
+### Time Synchronization
+
+\par Considering that after combining the datasets, it would not be possible to operate on both datasets at each time point, it was necessary to merge the two datasets with all their values. After this process, the data set was created by filling the missing values according to the full observation values above. Finally, with the ROC() function, returns are calculated and added to the data sets.
+```{r}
+# MERGING XTS FILES
+
+  ## 1M
+default_data_1 <- merge.xts(banvt = banvt_1m, nthol = nthol_1m, all = TRUE) 
+xts_wo_1 <- na.locf(default_data_1, fromLast=TRUE) %>% na.exclude() %>% 
+  `colnames<-`(c("banvt", "nthol"))
+tbl_1 <- xts_wo_1 %>% fortify.zoo %>% as_tibble() %>% rename("Timestamp" = "Index")
+
+    ### 1M - RETURNS 
+tbl_1 %<>% mutate(banvt_return = ROC(banvt),
+                 nthol_return = ROC(nthol)) %>% na.exclude()
+
+  ## 15M
+default_data_15 <- merge.xts(banvt = banvt_15m, nthol = nthol_15m, all = TRUE) 
+xts_wo_15 <- na.locf(default_data_15, fromLast=TRUE) %>% na.exclude() %>% 
+  `colnames<-`(c("banvt", "nthol"))
+tbl_15 <- xts_wo_15 %>% fortify.zoo %>% as_tibble() %>% rename("Timestamp" = "Index")
+
+    ### 15M - RETURNS
+tbl_15 %<>% mutate(banvt_return = ROC(banvt),
+                   nthol_return = ROC(nthol)) %>% na.exclude()
+
+  ## 30M
+default_data_30 <- merge.xts(banvt = banvt_30m, nthol = nthol_30m, all = TRUE) 
+xts_wo_30 <- na.locf(default_data_30, fromLast=TRUE) %>% na.exclude() %>% 
+  `colnames<-`(c("banvt", "nthol"))
+tbl_30 <- xts_wo_30 %>% fortify.zoo %>% as_tibble() %>% rename("Timestamp" = "Index")
+
+    ### 30M - RETURNS
+tbl_30 %<>% mutate(banvt_return = ROC(banvt),
+                   nthol_return = ROC(nthol)) %>% na.exclude()
+```
+
+**30 Minutes Data**
+
+\par The final data set obtained after the manipulation procedures applied is as follows.
+
+```{r}
+tbl_30 %>% head() %>% kable()
+```
+
+# Understanding Value at Risk (VaR)
+
+\par Value at risk (VaR) is a statistic that measures and quantifies the level of financial risk within a firm, portfolio or position over a specific time frame. This metric is most commonly used by investment and commercial banks to determine the extent and occurrence ratio of potential losses in their institutional portfolios.
+
+\par To understand the logic of Value at risk, firstly, parametric, historical, monte carlo and age weighted historical simulation values were calculated according to a single time interval (30M) and a single significance value (0.05).
+
+## Parametric Value at Risk 
+
+\par Under the assumption that the returns are distributed normally, the following calculation is done using the average and standard deviations of the returns. Value at Risk values of two stocks are as follows.
+
+```{r}
+alpha_ <- 0.05 
+z <- qnorm(alpha_)
+
+mean_dr_banvt <- mean(tbl_30 %>% pull(banvt_return))
+mean_dr_nthol <- mean(tbl_30 %>% pull(nthol_return))
+
+sd_dr_banvt <- sd(tbl_30 %>% pull(banvt_return))
+sd_dr_nthol <- sd(tbl_30 %>% pull(nthol_return))
+
+parametric_var_banvt <- -mean_dr_banvt + z*sd_dr_banvt
+parametric_var_nthol <- -mean_dr_nthol + z*sd_dr_nthol
+tibble(Parametric_banvt = parametric_var_banvt, 
+       Parametric_nthol = parametric_var_nthol) %>% kable()
+```
+
+## Historical Value at Risk 
+
+\par Calculated using quantiles in the historical VAR dataset. In this section, VaR values corresponding to 0.05 quantile values calculated at 0.05 significance level are as follows.
+```{r}
+historical_var_banvt <- quantile(tbl_30 %>% pull(banvt_return), alpha_)
+historical_var_nthol <- quantile(tbl_30 %>% pull(nthol_return), alpha_)
+tibble(historical_banvt = historical_var_banvt, 
+       historical_nthol = historical_var_nthol) %>% kable()
+```
+
+\newpage 
+
+## Monte Carlo Simulation
+
+\par Monte carlo simulation is known as a very effective method in cases where the distribution of a data set is known. In this section, a Monte Carlo simulation, which is repeated 1000 times, is created under the assumption that returns are distributed normally.
+
+```{r}
+mean_dr_banvt <- tbl_30 %>% pull(banvt_return) %>% mean()
+mean_dr_nthol <- tbl_30 %>% pull(nthol_return) %>% mean()
+
+calculate_one_period_change <- function(mean, sd){-mean+sd*rnorm(1)}
+simulated_returns_banvt <- replicate(1000, 
+                               calculate_one_period_change(mean = mean_dr_banvt,
+                                                           sd = sd_dr_banvt))
+simulated_returns_nthol <- replicate(1000, 
+                                     calculate_one_period_change(mean = mean_dr_nthol,
+                                                                 sd = sd_dr_nthol))
+
+mc_var_banvt <- quantile(simulated_returns_banvt, alpha_)
+mc_var_nthol <- quantile(simulated_returns_nthol, alpha_)
+
+tibble(mc_banvt = mc_var_banvt, 
+       mc_nthol = mc_var_nthol) %>% kable()
+```
+
+## Age-Weighted Historical Simulation 
+
+\par The Age wieghted historical simulation method calculates VaR by giving more weight to recent occurrences rather than giving equal weights to each observation value. Here the weighting parameter is the lambda parameter.
+```{r}
+lambda <- 0.98
+
+basic_histor_banvt <- tbl_30 %>% select(banvt, banvt_return) %>% 
+  mutate(Periods_30 = 1:nrow(tbl_30)) %>% 
+  arrange(banvt_return) %>% 
+  mutate(eq_weights = 1/nrow(tbl_30),
+         cum_eq_weigths = cumsum(eq_weights)) 
+
+ewh_banvt <- basic_histor_banvt %>% 
+  mutate(hybrid_weights = ((1-lambda)*(lambda^(Periods_30-1)))/(1-lambda^k),
+         hybrid_cum_weights = cumsum(hybrid_weights))   
+
+ewh_var_banvt <- approx(x =ewh_banvt$hybrid_cum_weights, 
+       y = ewh_banvt$banvt_return,
+       xout=alpha_)$y
+
+basic_histor_nthol <- tbl_30 %>% select(nthol, nthol_return) %>% 
+  mutate(Periods_30 = 1:nrow(tbl_30)) %>% 
+  arrange(nthol_return) %>% 
+  mutate(eq_weights = 1/nrow(tbl_30),
+         cum_eq_weigths = cumsum(eq_weights)) 
+
+ewh_nthol <- basic_histor_nthol %>% 
+  mutate(hybrid_weights = ((1-lambda)*(lambda^(Periods_30-1)))/(1-lambda^k),
+         hybrid_cum_weights = cumsum(hybrid_weights))   
+
+ewh_var_nthol <- approx(x =ewh_nthol$hybrid_cum_weights, 
+       y = ewh_nthol$nthol_return,
+       xout=alpha_)$y
+
+tibble(ewh_banvt = ewh_var_banvt, 
+       ewh_nthol = ewh_var_nthol) %>% kable()
+
+```
+
+## Overall 
+
+\par VaR values calculated with different methods at the significance level of 0.05 are listed as follows. Backtesting methods will be used in the following sections to test the accuracy of these values.
+
+```{r}
+tibble("VaR" = c("Parametric", "Historical", "Monte Carlo", "Age Weighted HS"),
+       "Banvt" = c(parametric_var_banvt, historical_var_banvt, mc_var_banvt, ewh_var_banvt),
+       "Nthol" = c(parametric_var_nthol, historical_var_nthol, mc_var_nthol, ewh_var_nthol)) %>% 
+  kable()
+```
+
+# Applied Value at Risk (Sliding)
+
+\par It will be more accurate and consistent to test the accuracy of value at risk values with sliding method. As it is seen in the figure, a structure was established that takes 252 observations as training and progresses by predicting the next observation (observation 253).
+
+```{r, fig.height=3}
+img <- readPNG("C:/Users/mnayansak/Desktop/sliding.PNG")
+grid.raster(img)
+```
+
+## alpha = 0.05 | 30 Minutes 
+
+\par Sliding processes are applied on different VaR calculation techniques and different data sets. Firstly, Value at Risk values were calculated with a 30 minute banvit data set at 0.05 significance level. According to the calculated values in each sliding operation, a variable encoded as 0 in case of any excess and 1 in case of absence is added.
+
+### Banvit | Average Performance
+
+\par The success performances of the methods used are calculated by taking the average of the variable consisting of 0 and 1 values indicating whether there are excesses. According to the table, the best result was found to be Monte Carlo method.
+
+```{r}
+res_CM_bv_3095 %>% 
+  kable()
+```
+
+\newpage 
+
+### Backtests 
+
+\par Kupiec and Christoffesen backtest methods have been used to check whether the exceedence are statistically significant and systematic.
+
+**Kupiec Tests (POF)**
+
+\par $H_0: p = \hat{p}$
+\par $H_A: p \neq \hat{p}$
+
+**Christoffesen Test**
+
+\par $H_0:$ Independent failures
+\par $H_A:$ Dependent failures
+
+
+```{r}
+res_BT_bv_3095 %>% 
+  kable()
+```
+\par According to the test results, it was concluded that the values calculated with historical VaR (1-alpha) were statistically compatible with the confidence level and exceedence were not systematic.
+
+### Net Holding | Average Performance
+
+\par In the 30-minute netholding data, the Parametric VaR and Monte Carlo VaR methods with a significance level of 0.05 worked with better performance.
+
+```{r}
+res_CM_nt_3095 %>% 
+  kable()
+```
+
+### Backtests 
+
+\par It is possible to say that historical VaR and age weighted HS VaR methods are more positive than backtest methods.
+
+```{r}
+res_BT_nt_3095 %>% 
+  kable()
+```
+
+## alpha = 0.05 | 15 Minutes 
+
+### Banvit | Average Performance
+
+\par In the 15-minute banvit data, the Parametric VaR and Monte Carlo VaR methods with a significance level of 0.05 worked with better performance.
+
+```{r}
+res_CM_bv_1595 %>% 
+  kable()
+```
+
+### Backtests 
+
+**Kupiec Tests (POF)**
+
+\par $H_0: p = \hat{p}$
+\par $H_A: p \neq \hat{p}$
+
+**Christoffesen Test**
+
+\par $H_0:$ independent failures
+\par $H_A:$ dependent failures
+
+
+```{r}
+res_BT_bv_1595 %>% 
+  kable()
+```
+
+\par As the frequency of the data increases, the results of VaR values have been inconsistent. For this reason, daily calculations are made in the last section.
+
+### Net Holding | Average Performance
+
+\par In the 15-minute nthol data, the Parametric VaR and Monte Carlo VaR methods with a significance level of 0.05 worked with better performance.
+```{r}
+res_CM_nt_1595 %>% 
+  kable()
+```
+
+### Backtests 
+```{r}
+res_BT_nt_1595 %>% 
+  kable()
+```
+\par As the frequency increases as above, the results were observed to be inconsistent.
+
+## alpha = 0.05 | 1 Minute 
+
+### Banvit | Average Performance
+
+\par In the 1-minute banvit data, the Parametric VaR and Monte Carlo VaR methods with a significance level of 0.05 worked with better performance.
+
+```{r}
+res_CM_bv_195 %>% 
+  kable()
+```
+
+### Backtests 
+
+**Kupiec Tests (POF)**
+
+\par $H_0: p = \hat{p}$
+\par $H_A: p \neq \hat{p}$
+
+**Christoffesen Test**
+
+\par $H_0:$ independent failures
+\par $H_A:$ dependent failures
+
+
+```{r}
+res_BT_bv_195 %>% 
+  kable()
+```
+\par P-values decreased as frequency increased. And hypotheses tend to be strongly rejected in this way.
+
+### Net Holding | Average Performance
+
+\par Unlike others, nthol data at 1 minute frequency works better with Age Weighted HS.
+
+```{r}
+res_CM_nt_195 %>% 
+  kable()
+```
+
+### Backtests 
+
+```{r}
+res_BT_nt_195 %>% 
+  kable()
+```
+
+## VaR Performance | alpha = 0.05 
+
+\par In the generalized table below, it is possible to say which method works better in which data set. As a result, it is possible to say that the Monte Carlo simulation method shows an average of around 97% performance in all data sets.
+
+```{r}
+data.frame(banvt_30_95 %>% colMeans(na.rm = T),
+           banvt_15_95 %>% colMeans(na.rm = T),
+           banvt_1_95 %>% colMeans(na.rm = T),
+           nthol_30_95 %>% colMeans(na.rm = T),
+           nthol_15_95 %>% colMeans(na.rm = T),
+           nthol_1_95 %>% colMeans(na.rm = T)) %>% `colnames<-`(c("Min=30|banvt",  
+                                                                  "Min=15|banvt",
+                                                                  "Min=1|banvt",
+                                                                  "Min=30|nthol",
+                                                                  "Min=15|nthol",
+                                                                  "Min=1|nthol")) %>% 
+  kable()
+```
+
+
+## alpha = 0.01 | 30 Minutes 
+
+### Banvit | Average Performance
+
+\par As the Alpha value decreases, the risk decreases even more. Consequently, VaR results will be even lower. It is possible to see that the average results obtained below increase.
+
+```{r}
+res_CM_bv_3099 %>% 
+  kable()
+```
+
+### Backtests 
+
+**Kupiec Tests (POF)**
+
+\par $H_0: p = \hat{p}$
+\par $H_A: p \neq \hat{p}$
+
+**Christoffesen Test**
+
+\par $H_0:$ independent failures
+\par $H_A:$ dependent failures
+
+\par According to the calculated backtest results, it was concluded that exceedence of Historical VaR and Monte Carlo VaR values were statistically compatible with 0.99 and exceedence were not systematic.
+
+```{r}
+res_BT_bv_3099 %>% 
+  kable()
+```
+
+### Net Holding | Average Performance
+
+\par It is observed that Historical VaR and Monte Carlo VaR methods work with higher performance in nthol (30M) data.
+
+```{r}
+res_CM_nt_3099 %>% 
+  kable()
+```
+
+### Backtests 
+
+\par According to the backtest methods, the historical VaR method is more consistent than the other methods.
+```{r}
+res_BT_nt_3099 %>% 
+  kable()
+```
+
+
+## alpha = 0.01 | 15 Minutes 
+
+### Banvit | Average Performance
+
+\par It is observed that Historical VaR and Monte Carlo VaR methods work with higher performance in banvt(15M) data.
+
+```{r}
+res_CM_bv_1599 %>% 
+  kable()
+```
+
+### Backtests 
+
+**Kupiec Tests (POF)**
+
+\par $H_0: p = \hat{p}$
+\par $H_A: p \neq \hat{p}$
+
+**Christoffesen Test**
+
+\par $H_0:$ independent failures
+\par $H_A:$ dependent failures
+
+
+```{r}
+res_BT_bv_1599 %>% 
+  kable()
+```
+\par As in the previous sections, the significance of the methods disappears as the frequency increases.
+
+### Net Holding | Average Performance
+
+\par It is observed that Historical VaR and Monte Carlo VaR methods work with higher performance in nthol (15M) data.
+```{r}
+res_CM_nt_1599 %>% 
+  kable()
+```
+
+### Backtests 
+
+```{r}
+res_BT_nt_1599 %>% 
+  kable()
+```
+
+\par It is possible to say for this section that the results are meaningless as the frequency increases.
+
+## alpha = 0.01 | 1 Minute
+
+### Banvit | Average Performance
+
+\par It is observed that Historical VaR and Monte Carlo VaR methods work with higher performance in banvy (1M) data.
+```{r}
+res_CM_bv_199 %>% 
+  kable()
+```
+
+\newpage
+
+### Backtests 
+
+**Kupiec Tests (POF)**
+
+\par $H_0: p = \hat{p}$
+\par $H_A: p \neq \hat{p}$
+
+**Christoffesen Test**
+
+\par $H_0:$ independent failures
+\par $H_A:$ dependent failures
+
+
+```{r}
+res_BT_bv_199 %>% 
+  kable()
+```
+
+### Net Holding | Average Performance
+
+\par It can be said that Historical VaR and Age Weighted HS methods are over 99% successful according to VaR values calculated at a significance level of 0.01 minutes. However, it is not the right way to work at this frequency since the backtest results will be meaningless due to the high frequency.
+```{r}
+res_CM_nt_199 %>% 
+  kable()
+```
+
+### Backtests 
+```{r}
+res_BT_nt_199 %>% 
+  kable()
+```
+
+## VaR Performance | alpha = 0.01
+
+\par It is observed that when the Alpha value decreases, the historical VaR method gives more consistent results when applied to all data sets.
+
+```{r}
+data.frame(banvt_30_99 %>% colMeans(na.rm = T),
+           banvt_15_99 %>% colMeans(na.rm = T),
+           banvt_1_99 %>% colMeans(na.rm = T),
+           nthol_30_99 %>% colMeans(na.rm = T),
+           nthol_15_99 %>% colMeans(na.rm = T),
+           nthol_1_99 %>% colMeans(na.rm = T)) %>% `colnames<-`(c("Min=30|banvt",  
+                                                                  "Min=15|banvt",
+                                                                  "Min=1|banvt",
+                                                                  "Min=30|nthol",
+                                                                  "Min=15|nthol",
+                                                                  "Min=1|nthol")) %>% 
+  kable()
+```
+
+
+# VaR | Daily Calculation 
+
+\par When the data set is translated daily, the number of observations in the data is 61 and errors occur in calculations with confidence levels such as 99% and 95%. Therefore, alpha value is chosen as 0.10.
+
+\par The sliding method and VaR calculation methods used in the previous analyzes are applied as follows. Sliding processes were applied in 14 day steps.
+
+```{r}
+alpha_ <- 0.1
+
+banvt_daily <- cbind(to.daily(banvt_xts),rowMeans(to.daily(banvt_xts)[,2:3]))[,5]
+nthol_daily <- cbind(to.daily(nthol_xts),rowMeans(to.daily(nthol_xts)[,2:3]))[,5]
+
+daily_data <- merge.xts(banvt = banvt_daily, nthol = nthol_daily, all = TRUE) 
+daily_data_wo <- na.locf(daily_data, fromLast=TRUE) %>% na.exclude() %>% 
+  `colnames<-`(c("banvt", "nthol"))
+tbl <- daily_data_wo %>% fortify.zoo %>% as_tibble() %>% rename("Timestamp" = "Index")
+
+tbl %<>% mutate(banvt_return = ROC(banvt),
+                nthol_return = ROC(nthol)) %>% na.exclude()
+
+banvt_d <- data.frame(parametric_VaR = NA,
+                         historic_VaR = NA,
+                         monte_carlo_VaR = NA,
+                         awh_VaR = NA)
+nthol_d <- data.frame(parametric_VaR = NA,
+                         historic_VaR = NA,
+                         monte_carlo_VaR = NA,
+                         awh_VaR = NA)
+banvt_d_backtest <- data.frame(Actual = NA, param_VaR = NA, hist_VaR = NA, 
+                               mc_VaR = NA, ewhs_VaR = NA)
+nthol_d_backtest <- data.frame(Actual = NA, param_VaR = NA, hist_VaR = NA, 
+                                mc_VaR = NA, ewhs_VaR = NA)
+
+k <- 14
+for(i in 1:((nrow(tbl)-k)-1)){
+  
+  ## PARAMETRIC VaR 
+  
+  mean_banvt <-  mean(tbl %>% slice(1:(k+i-1)) %>% pull(banvt_return))
+  mean_nthol <- mean(tbl %>% slice(1:(k+i-1)) %>% pull(nthol_return))
+  
+  sd_dr_banvt <- sd(tbl %>% slice(1:(k+i-1)) %>% pull(banvt_return))
+  sd_dr_nthol <- sd(tbl %>% slice(1:(k+i-1)) %>% pull(nthol_return))
+  
+  banvt_d_backtest[,1] <- tbl %>% slice((k+1):nrow(tbl)) %>% select(banvt_return)
+  banvt_d_backtest[i,2] <- -mean_banvt + z*sd_dr_banvt
+  
+  nthol_d_backtest[,1] <- tbl %>% slice((k+1):nrow(tbl)) %>% select(nthol_return)
+  nthol_d_backtest[i,2] <- -mean_nthol + z*sd_dr_nthol
+  
+  banvt_d[i,1] <- ifelse(-mean_banvt + z*sd_dr_banvt >
+                              tbl %>% select(banvt_return) %>% 
+                           filter(row_number() == (k+i)) %>% pull(),
+                            0,1)
+  
+  nthol_d[i,1] <- ifelse(-mean_nthol + z*sd_dr_nthol >
+                              tbl %>% select(nthol_return) %>% 
+                           filter(row_number() == (k+i)) %>% pull(),
+                            0,1)
+  
+  ## HISTORICAL VaR 
+  banvt_q <- quantile(tbl %>% slice(1:(k+i-1)) %>% pull(banvt_return), alpha_)
+  nthol_q <- quantile(tbl %>% slice(1:(k+i-1)) %>% pull(nthol_return), alpha_)
+  
+  banvt_d_backtest[i,3] <- banvt_q
+  nthol_d_backtest[i,3] <- nthol_q
+  
+  banvt_d[i,2] <- ifelse(banvt_q>
+                              tbl %>% select(banvt_return) %>% 
+                           filter(row_number() == (k+i)) %>% pull(),
+                            0,1)
+  nthol_d[i,2] <- ifelse(nthol_q>
+                              tbl %>% select(nthol_return) %>% 
+                           filter(row_number() == (k+i)) %>% pull(),
+                            0,1)
+  
+  ## MONTE CARLO SIMULATION 
+  mean_dr_banvt <- tbl %>% slice(1:(k+i-1)) %>% pull(banvt_return) %>% mean()
+  mean_dr_nthol <- tbl %>% slice(1:(k+i-1)) %>% pull(nthol_return) %>% mean()
+  
+  simulated_returns_banvt <- replicate(1000,
+                                       calculate_one_period_change(mean = mean_dr_banvt,
+                                                                   sd = sd_dr_banvt))
+  simulated_returns_nthol <- replicate(1000,
+                                       calculate_one_period_change(mean = mean_dr_nthol,
+                                                                   sd = sd_dr_nthol))
+  
+  banvt_d_backtest[i,4] <- quantile(simulated_returns_banvt, alpha_)
+  nthol_d_backtest[i,4] <- quantile(simulated_returns_nthol, alpha_)
+  
+  banvt_d[i,3] <- ifelse(quantile(simulated_returns_banvt, alpha_)>
+                              tbl %>% select(banvt_return) %>% 
+                           filter(row_number() == (k+i)) %>% pull(),
+                            0,1)
+  
+  nthol_d[i,3] <- ifelse(quantile(simulated_returns_nthol, alpha_)>
+                              tbl %>% select(nthol_return) %>% 
+                           filter(row_number() == (k+i)) %>% pull(),
+                            0,1)
+  
+  # AGE-WEIGHTED HISTORICAL SIMULATION | INTERPOLATION
+  
+  ## BANVT
+  basic_histor_banvt <- tbl %>% select(banvt, banvt_return) %>%
+    slice((1+i-1):(k+i-1)) %>%
+    mutate(Periods_1 = 1:k) %>%
+    arrange(banvt_return) %>%
+    mutate(eq_weights = 1/k,
+           cum_eq_weigths = cumsum(eq_weights))
+  
+  awh_banvt <- basic_histor_banvt %>%
+    mutate(hybrid_weights = ((1-lambda)*(lambda^(Periods_1-1)))/(1-lambda^k),
+           hybrid_cum_weights = cumsum(hybrid_weights))
+  
+  banvt_d_backtest[i,5] <- approx(x =awh_banvt$hybrid_cum_weights,
+                                  y = awh_banvt$banvt_return,
+                                  xout=alpha_)$y
+  
+  banvt_d[i,4] <- ifelse(approx(x = awh_banvt$hybrid_cum_weights,
+                                y = awh_banvt$banvt_return,
+                                xout=alpha_)$y>
+                           tbl %>% select(banvt_return) %>% 
+                           filter(row_number() == k+i) %>% pull(),
+                         0,1)
+  
+  ## NTHOL
+  basic_histor_nthol <- tbl %>% select(nthol, nthol_return) %>%
+    slice((1+i-1):(k+i-1)) %>%
+    mutate(Periods_1 = 1:k) %>%
+    arrange(nthol_return) %>%
+    mutate(eq_weights = 1/k,
+           cum_eq_weigths = cumsum(eq_weights))
+  
+  awh_nthol <- basic_histor_nthol %>%
+    mutate(hybrid_weights = ((1-lambda)*(lambda^(Periods_1-1)))/(1-lambda^k),
+           hybrid_cum_weights = cumsum(hybrid_weights))
+  
+  nthol_d_backtest[i,5] <- approx(x =awh_nthol$hybrid_cum_weights,
+                                  y = awh_nthol$nthol_return,
+                                  xout=alpha_)$y
+  
+  nthol_d[i,4] <- ifelse(approx(x =awh_nthol$hybrid_cum_weights,               
+                                y = awh_nthol$nthol_return,
+                                xout=alpha_)$y>
+                           tbl %>% select(banvt_return) %>% 
+                           filter(row_number() == k+i) %>% pull(),
+                         0,1)
+}
+
+```
+
+## Banvit | Average Performance
+
+\par VaR performances calculated by converting the dataset to daily base and calculated with 90% confidence are as follows. Parametric var and Age Weighted HS methods have been observed to give more meaningful accurate results.
+```{r}
+banvt_d %>% colMeans(na.rm = T) %>% 
+  kable()
+```
+
+### Backtests 
+
+**Kupiec Tests (POF)**
+
+\par $H_0: p = \hat{p}$
+\par $H_A: p \neq \hat{p}$
+
+**Christoffesen Test**
+
+\par $H_0:$ independent failures
+\par $H_A:$ dependent failures
+
+\par When the data is converted to daily base, it is observed that the results are more consistent than backtest methods. In addition, it is observed that the Age Weighted HS method is more preferable.
+
+```{r}
+bind_rows(
+  bind_cols(` ` = "Kupiec_banvt", 
+            tibble(Parametric_VaR = (BacktestVaR(banvt_d_backtest$Actual, 
+                                                 banvt_d_backtest$param_VaR, 0.1)$LRuc)[2],
+                   Historical_VaR = (BacktestVaR(banvt_d_backtest$Actual, 
+                                                 banvt_d_backtest$hist_VaR, 0.1)$LRuc)[2],
+                   MonteCarlo_VaR = (BacktestVaR(banvt_d_backtest$Actual, 
+                                                 banvt_d_backtest$mc_VaR, 0.1)$LRuc)[2],
+                   AgeWeighted_VaR = (BacktestVaR(banvt_d_backtest$Actual, 
+                                                  banvt_d_backtest$ewhs_VaR, 0.1)$LRuc)[2])),
+  bind_cols(` ` = "Christoffesen_banvt",
+            tibble(Parametric_VaR = (BacktestVaR(banvt_d_backtest$Actual, 
+                                                 banvt_d_backtest$param_VaR, 0.1)$LRcc)[2],
+                   Historical_VaR = (BacktestVaR(banvt_d_backtest$Actual, 
+                                                 banvt_d_backtest$hist_VaR, 0.1)$LRcc)[2],
+                   MonteCarlo_VaR = (BacktestVaR(banvt_d_backtest$Actual, 
+                                                 banvt_d_backtest$mc_VaR, 0.1)$LRcc)[2],
+                   AgeWeighted_VaR = (BacktestVaR(banvt_d_backtest$Actual, 
+                                                  banvt_d_backtest$ewhs_VaR, 0.1)$LRcc)[2]))) %>% 
+  kable()
+```
+
+### Net Holding | Average Performance
+
+\par It was observed that the Age Weighted method exhibited over 95% success on nthol data on a daily basis.
+
+```{r}
+nthol_d %>% colMeans(na.rm = T) %>% 
+  kable()
+```
+
+### Backtests 
+
+\par According to the calculated backtest values, it can be said that the results are more meaningful and consistent than other time periods.
+```{r}
+bind_rows(
+  bind_cols(` ` = "Kupiec_Nthol",
+            tibble(Parametric_VaR = (BacktestVaR(nthol_d_backtest$Actual,
+                                                 nthol_d_backtest$param_VaR, 0.1)$LRuc)[2],
+                   Historical_VaR = (BacktestVaR(nthol_d_backtest$Actual, 
+                                                 nthol_d_backtest$hist_VaR, 0.1)$LRuc)[2],
+                   MonteCarlo_VaR = (BacktestVaR(nthol_d_backtest$Actual,
+                                                 nthol_d_backtest$mc_VaR, 0.1)$LRuc)[2],
+                   AgeWeighted_VaR = (BacktestVaR(nthol_d_backtest$Actual,
+                                                 nthol_d_backtest$ewhs_VaR, 0.1)$LRuc)[2])),
+  bind_cols(` ` = "Christoffesen_Ntna.rm = Thol",
+            tibble(Parametric_VaR = (BacktestVaR(nthol_d_backtest$Actual, 
+                                                 nthol_d_backtest$param_VaR, 0.1)$LRcc)[2],
+                   Historical_VaR = (BacktestVaR(nthol_d_backtest$Actual,
+                                                 nthol_d_backtest$hist_VaR, 0.1)$LRcc)[2],
+                   MonteCarlo_VaR = (BacktestVaR(nthol_d_backtest$Actual, 
+                                                 nthol_d_backtest$mc_VaR, 0.1)$LRcc)[2],
+                   AgeWeighted_VaR = (BacktestVaR(nthol_d_backtest$Actual, 
+                                                 nthol_d_backtest$ewhs_VaR, 0.1)$LRcc[2])))) %>% 
+  kable()
+```
+
+
+\newpage 
+
+# Conclusion
+
+\par VaR values were calculated on different data sets at different significance levels and their accuracy was checked. 
+
+* It is not possible to make a clear comment about the accuracy of VaR values obtained with frequencies higher than 30 minutes in the data set.
+
+* At the level of 95% confidence, monte carlo method has given more accurate and reliable results than others.
+
+* It was seen that the historical VaR value produced more accurate results when the confidence level was increased and the risk was reduced.
+
+* When the data was converted to daily base, Age Weighted HS method, which did not stand out in the analysis calculated with other frequencies, was found to be more successful than other methods.
+
+\par As a result, calculating VaR values on a daily basis will provide more accurate results. In further studies, it will be possible to find hyperparametry of Age-Weighted HS method and obtain more accurate results with correct **lambda** value.
